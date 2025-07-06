@@ -75,13 +75,11 @@ pub const Server = struct {
         var req = try Request.init(arena_alloc.allocator(), conn.stream.reader());
         defer req.deinit();
 
-        _ = try conn.stream.write("HTTP/1.1 ");
         if (std.mem.eql(u8, req.uri, "/")) {
-            _ = try conn.stream.write("200 OK");
+            _ = try conn.stream.write("HTTP/1.1 200 OK\r\n\r\n");
         } else {
-            _ = try conn.stream.write("404 Not Found");
+            _ = try conn.stream.write("HTTP/1.1 404 Not Found\r\n\r\n");
         }
-        _ = try conn.stream.write("\r\n\r\n");
     }
 
     pub fn deinit(self: *Server) void {
