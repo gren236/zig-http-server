@@ -143,9 +143,8 @@ const header_names_map = std.StaticStringMap(Header).initComptime(blk: {
     var res: [header_names.len]struct { []const u8, Header } = undefined;
 
     for (header_names, 0..) |header_name, i| {
-        var name_lower: [header_name.len:0]u8 = undefined;
+        var name_lower: [header_name.len]u8 = undefined;
         _ = std.ascii.lowerString(&name_lower, header_name);
-        name_lower[header_name.len] = 0;
         const final = name_lower;
         res[i] = .{ &final, @enumFromInt(i) };
     }
@@ -423,18 +422,34 @@ pub const Server = struct {
 
         if (std.mem.eql(u8, req.uri, "/")) {
             var resp = Response.init(alloc);
+            defer resp.deinit();
+
+            try resp.send(StatusCode.ok, conn.stream.writer());
+            return;
+        }
+
+        if (std.mem.eql(u8, req.uri, "/user-agent")) {
+            var resp = Response.init(alloc);
+            defer resp.deinit();
+
+            try resp.setHeader(Header.content_type, "text/plain");
+            try resp.setBody(req.headers.get(Header.user_agent) orelse return Error.InvalidRequest);
+
             try resp.send(StatusCode.ok, conn.stream.writer());
             return;
         }
 
         if (req.path_segments.len > 0 and std.mem.eql(u8, req.path_segments[0], "echo")) {
             var resp = Response.init(alloc);
+            defer resp.deinit();
+
             if (req.path_segments.len > 1) {
                 try resp.setHeader(Header.content_type, "text/plain");
                 try resp.setBody(req.path_segments[1]);
             }
 
             try resp.send(StatusCode.ok, conn.stream.writer());
+            return;
         }
 
         var resp = Response.init(alloc);
