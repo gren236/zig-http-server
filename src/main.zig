@@ -1,9 +1,14 @@
 const std = @import("std");
 const http = @import("http.zig");
 
+const host = "127.0.0.1";
+const port = 4221;
+
 pub fn main() !void {
-    var server = try http.Server.init("127.0.0.1", 4221);
+    var server = try http.Server.init(host, port);
     defer server.deinit();
+
+    std.log.debug("Running HTTP server on {s}:{d}", .{ host, port });
 
     var debug_alloc: std.heap.DebugAllocator(.{}) = .init;
     defer _ = switch (debug_alloc.deinit()) {
@@ -11,5 +16,5 @@ pub fn main() !void {
         .ok => void,
     };
 
-    try server.serveRequest(debug_alloc.allocator());
+    try server.serve(debug_alloc.allocator());
 }

@@ -408,30 +408,33 @@ pub const Server = struct {
         };
     }
 
-    pub fn serveRequest(self: *Server, allocator: std.mem.Allocator) !void {
-        const conn = try self.listener.accept();
-        defer conn.stream.close();
+    pub fn serve(self: *Server, allocator: std.mem.Allocator) !void {
+        while (true) {
+            const conn = try self.listener.accept();
+            defer conn.stream.close();
 
-        var arena_alloc = std.heap.ArenaAllocator.init(allocator);
-        defer arena_alloc.deinit();
+            var arena_alloc = std.heap.ArenaAllocator.init(allocator);
+            defer arena_alloc.deinit();
 
-        const alloc = arena_alloc.allocator();
+            try Server.serveRequest(arena_alloc.allocator(), conn);
+        }
+    }
 
-        var req = try Request.init(alloc, conn.stream.reader());
+    fn serveRequest(allocator: std.mem.Allocator, conn: std.net.Server.Connection) !void {
+        var req = try Request.init(allocator, conn.stream.reader());
         defer req.deinit();
 
-        if (std.mem.eql(u8, req.uri, "/")) {
-            var resp = Response.init(alloc);
-            defer resp.deinit();
+        std.log.debug("Received request: {s} {s}", .{ @tagName(req.method), req.uri });
 
+        var resp = Response.init(allocator);
+        defer resp.deinit();
+
+        if (std.mem.eql(u8, req.uri, "/")) {
             try resp.send(StatusCode.ok, conn.stream.writer());
             return;
         }
 
         if (std.mem.eql(u8, req.uri, "/user-agent")) {
-            var resp = Response.init(alloc);
-            defer resp.deinit();
-
             try resp.setHeader(Header.content_type, "text/plain");
             try resp.setBody(req.headers.get(Header.user_agent) orelse return Error.InvalidRequest);
 
@@ -440,9 +443,6 @@ pub const Server = struct {
         }
 
         if (req.path_segments.len > 0 and std.mem.eql(u8, req.path_segments[0], "echo")) {
-            var resp = Response.init(alloc);
-            defer resp.deinit();
-
             if (req.path_segments.len > 1) {
                 try resp.setHeader(Header.content_type, "text/plain");
                 try resp.setBody(req.path_segments[1]);
@@ -452,7 +452,6 @@ pub const Server = struct {
             return;
         }
 
-        var resp = Response.init(alloc);
         try resp.send(StatusCode.not_found, conn.stream.writer());
     }
 
