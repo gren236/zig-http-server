@@ -396,37 +396,55 @@ test Response {
 }
 
 pub const Server = struct {
+    allocator: std.mem.Allocator,
     address: net.Address,
     listener: net.Server,
+    thread_pool: *std.Thread.Pool,
 
-    pub fn init(host: []const u8, port: u16) !Server {
+    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !Server {
         const address = try net.Address.resolveIp(host, port);
 
-        return .{
+        const thread_pool = try allocator.create(std.Thread.Pool);
+        try thread_pool.init(.{ .allocator = allocator });
+
+        const server = Server{
+            .allocator = allocator,
             .address = address,
             .listener = try address.listen(.{ .reuse_address = true }),
+            .thread_pool = thread_pool,
         };
+
+        return server;
     }
 
-    pub fn serve(self: *Server, allocator: std.mem.Allocator) !void {
+    pub fn serve(self: *Server) !void {
         while (true) {
             const conn = try self.listener.accept();
-            defer conn.stream.close();
 
-            var arena_alloc = std.heap.ArenaAllocator.init(allocator);
-            defer arena_alloc.deinit();
-
-            try Server.serveRequest(arena_alloc.allocator(), conn);
+            try self.thread_pool.spawn(Server.handleRequestThreaded, .{ self.allocator, conn });
         }
     }
 
-    fn serveRequest(allocator: std.mem.Allocator, conn: std.net.Server.Connection) !void {
-        var req = try Request.init(allocator, conn.stream.reader());
+    fn handleRequestThreaded(allocator: std.mem.Allocator, conn: std.net.Server.Connection) void {
+        handleRequest(allocator, conn) catch |err| {
+            std.log.debug("Request handling failed: {}", .{err});
+        };
+    }
+
+    fn handleRequest(allocator: std.mem.Allocator, conn: std.net.Server.Connection) !void {
+        defer conn.stream.close();
+
+        var arena_alloc = std.heap.ArenaAllocator.init(allocator);
+        defer arena_alloc.deinit();
+
+        const alloc = arena_alloc.allocator();
+
+        var req = try Request.init(alloc, conn.stream.reader());
         defer req.deinit();
 
         std.log.debug("Received request: {s} {s}", .{ @tagName(req.method), req.uri });
 
-        var resp = Response.init(allocator);
+        var resp = Response.init(alloc);
         defer resp.deinit();
 
         if (std.mem.eql(u8, req.uri, "/")) {
@@ -456,6 +474,8 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) void {
+        self.thread_pool.deinit();
+        self.allocator.destroy(self.thread_pool);
         self.listener.deinit();
     }
 };

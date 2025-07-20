@@ -5,16 +5,16 @@ const host = "127.0.0.1";
 const port = 4221;
 
 pub fn main() !void {
-    var server = try http.Server.init(host, port);
-    defer server.deinit();
-
-    std.log.debug("Running HTTP server on {s}:{d}", .{ host, port });
-
     var debug_alloc: std.heap.DebugAllocator(.{}) = .init;
     defer _ = switch (debug_alloc.deinit()) {
         .leak => @panic("memory leak!"),
         .ok => void,
     };
 
-    try server.serve(debug_alloc.allocator());
+    var server = try http.Server.init(debug_alloc.allocator(), host, port);
+    defer server.deinit();
+
+    std.log.debug("Running HTTP server on {s}:{d}", .{ host, port });
+
+    try server.serve();
 }
