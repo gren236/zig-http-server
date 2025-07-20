@@ -158,6 +158,7 @@ pub const Header = enum {
     user_agent,
     host,
     accept,
+    accept_encoding,
 
     pub inline fn toString(self: Header) []const u8 {
         return header_names[@intFromEnum(self)];
@@ -333,7 +334,10 @@ pub const Response = struct {
         }
 
         self.headers.deinit();
-        self.allocator.free(self.body.?);
+
+        if (self.body != null) {
+            self.allocator.free(self.body.?);
+        }
     }
 
     pub fn setHeader(self: *Response, header: Header, val: []const u8) !void {
