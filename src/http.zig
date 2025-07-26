@@ -401,18 +401,19 @@ test Response {
     try resp.send(StatusCode.ok, buffer.writer());
     try testing.expectEqualStrings("HTTP/1.1 200 OK\r\nUser-Agent: foobar\r\nContent-Length: 12\r\n\r\nhello world!", buffer.items);
 }
-pub const Handler = struct { method: Method, uri: []const u8, handler_func: HandlerFunc };
 
-pub const HandlerFunc = *const fn (req: *Request, resp: *Response) anyerror!StatusCode;
+pub const Route = struct { method: Method, uri: []const u8, handler: Handler };
 
-pub fn Server(handlers: []const Handler) type {
+pub const Handler = *const fn (req: *Request, resp: *Response) anyerror!StatusCode;
+
+pub fn Server(routes: []const Route) type {
     return struct {
         allocator: std.mem.Allocator,
         address: net.Address,
         listener: net.Server,
         thread_pool: *std.Thread.Pool,
 
-        pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !Server(handlers) {
+        pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !Server(routes) {
             const address = try net.Address.resolveIp(host, port);
 
             const thread_pool = try allocator.create(std.Thread.Pool);
@@ -426,7 +427,7 @@ pub fn Server(handlers: []const Handler) type {
             };
         }
 
-        pub fn serve(self: *Server(handlers)) !void {
+        pub fn serve(self: *Server(routes)) !void {
             while (true) {
                 const conn = try self.listener.accept();
 
@@ -434,11 +435,11 @@ pub fn Server(handlers: []const Handler) type {
             }
         }
 
-        fn matchHandler(method: Method, uri: []const u8) ?HandlerFunc {
-            inline for (handlers) |handler| {
+        fn matchHandler(method: Method, uri: []const u8) ?Handler {
+            inline for (routes) |handler| {
                 if (handler.method == method) {
                     if (uri.len >= handler.uri.len and std.mem.eql(u8, uri[0..handler.uri.len], handler.uri)) { // match the start of URI for now
-                        return handler.handler_func;
+                        return handler.handler;
                     }
                 }
             }
@@ -482,7 +483,7 @@ pub fn Server(handlers: []const Handler) type {
             try resp.send(resp_code, conn.stream.writer());
         }
 
-        pub fn deinit(self: *Server(handlers)) void {
+        pub fn deinit(self: *Server(routes)) void {
             self.thread_pool.deinit();
             self.allocator.destroy(self.thread_pool);
             self.listener.deinit();
