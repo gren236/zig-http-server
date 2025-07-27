@@ -404,89 +404,97 @@ test Response {
 
 pub const Route = struct { method: Method, uri: []const u8, handler: Handler };
 
-pub const Handler = *const fn (req: *Request, resp: *Response) anyerror!StatusCode;
+// Interface for any generic handler implementation
+pub const Handler = struct {
+    ptr: *anyopaque,
+    handleFn: *const fn (ptr: *anyopaque, req: *Request, resp: *Response) anyerror!StatusCode,
 
-pub fn Server(routes: []const Route) type {
-    return struct {
-        allocator: std.mem.Allocator,
-        address: net.Address,
-        listener: net.Server,
-        thread_pool: *std.Thread.Pool,
+    pub fn handle(self: Handler, req: *Request, resp: *Response) anyerror!StatusCode {
+        return self.handleFn(self.ptr, req, resp);
+    }
+};
 
-        pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !Server(routes) {
-            const address = try net.Address.resolveIp(host, port);
+pub const Server = struct {
+    allocator: std.mem.Allocator,
+    address: net.Address,
+    listener: net.Server,
+    thread_pool: *std.Thread.Pool,
+    routes: []const Route,
 
-            const thread_pool = try allocator.create(std.Thread.Pool);
-            try thread_pool.init(.{ .allocator = allocator });
+    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, routes: []const Route) !Server {
+        const address = try net.Address.resolveIp(host, port);
 
-            return .{
-                .allocator = allocator,
-                .address = address,
-                .listener = try address.listen(.{ .reuse_address = true }),
-                .thread_pool = thread_pool,
-            };
+        const thread_pool = try allocator.create(std.Thread.Pool);
+        try thread_pool.init(.{ .allocator = allocator });
+
+        return .{
+            .allocator = allocator,
+            .address = address,
+            .listener = try address.listen(.{ .reuse_address = true }),
+            .thread_pool = thread_pool,
+            .routes = routes,
+        };
+    }
+
+    pub fn serve(self: *Server) !void {
+        while (true) {
+            const conn = try self.listener.accept();
+
+            try self.thread_pool.spawn(handleRequestThreaded, .{ self, conn });
         }
+    }
 
-        pub fn serve(self: *Server(routes)) !void {
-            while (true) {
-                const conn = try self.listener.accept();
-
-                try self.thread_pool.spawn(handleRequestThreaded, .{ self.allocator, conn });
-            }
-        }
-
-        fn matchHandler(method: Method, uri: []const u8) ?Handler {
-            inline for (routes) |handler| {
-                if (handler.method == method) {
-                    if (uri.len >= handler.uri.len and std.mem.eql(u8, uri[0..handler.uri.len], handler.uri)) { // match the start of URI for now
-                        return handler.handler;
-                    }
+    fn matchHandler(self: *Server, method: Method, uri: []const u8) ?Handler {
+        for (self.routes) |handler| {
+            if (handler.method == method) {
+                if (uri.len >= handler.uri.len and std.mem.eql(u8, uri[0..handler.uri.len], handler.uri)) { // match the start of URI for now
+                    return handler.handler;
                 }
             }
-
-            return null;
         }
 
-        fn handleRequestThreaded(allocator: std.mem.Allocator, conn: std.net.Server.Connection) void {
-            handleRequest(allocator, conn) catch |err| {
-                std.log.debug("Request handling failed: {}", .{err});
-            };
-        }
+        return null;
+    }
 
-        fn handleRequest(allocator: std.mem.Allocator, conn: std.net.Server.Connection) !void {
-            defer conn.stream.close();
+    fn handleRequestThreaded(self: *Server, conn: std.net.Server.Connection) void {
+        handleRequest(self, conn) catch |err| {
+            std.log.debug("Request handling failed: {}", .{err});
+        };
+    }
 
-            var arena_alloc = std.heap.ArenaAllocator.init(allocator);
-            defer arena_alloc.deinit();
+    fn handleRequest(self: *Server, conn: std.net.Server.Connection) !void {
+        defer conn.stream.close();
 
-            const alloc = arena_alloc.allocator();
+        var arena_alloc = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_alloc.deinit();
 
-            var req = try Request.init(alloc, conn.stream.reader());
-            defer req.deinit();
+        const alloc = arena_alloc.allocator();
 
-            std.log.debug("Received request: {s} {s}", .{ @tagName(req.method), req.uri });
+        var req = try Request.init(alloc, conn.stream.reader());
+        defer req.deinit();
 
-            var resp = Response.init(alloc);
-            defer resp.deinit();
+        std.log.debug("Received request: {s} {s}", .{ @tagName(req.method), req.uri });
 
-            const handler_func = matchHandler(req.method, req.uri) orelse {
-                try resp.send(StatusCode.not_found, conn.stream.writer());
-                return;
-            };
+        var resp = Response.init(alloc);
+        defer resp.deinit();
 
-            const resp_code = handler_func(&req, &resp) catch |err| {
-                std.log.err("Request handling failed: {}", .{err});
-                try resp.send(StatusCode.internal_error, conn.stream.writer());
-                return;
-            };
+        const handler = self.matchHandler(req.method, req.uri) orelse {
+            try resp.send(StatusCode.not_found, conn.stream.writer());
+            return;
+        };
 
-            try resp.send(resp_code, conn.stream.writer());
-        }
+        const resp_code = handler.handle(&req, &resp) catch |err| {
+            std.log.err("Request handling failed: {}", .{err});
+            try resp.send(StatusCode.internal_error, conn.stream.writer());
+            return;
+        };
 
-        pub fn deinit(self: *Server(routes)) void {
-            self.thread_pool.deinit();
-            self.allocator.destroy(self.thread_pool);
-            self.listener.deinit();
-        }
-    };
-}
+        try resp.send(resp_code, conn.stream.writer());
+    }
+
+    pub fn deinit(self: *Server) void {
+        self.thread_pool.deinit();
+        self.allocator.destroy(self.thread_pool);
+        self.listener.deinit();
+    }
+};

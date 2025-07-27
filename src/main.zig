@@ -3,16 +3,10 @@ const config = @import("config.zig");
 const http = @import("http.zig");
 const handlers = @import("handlers.zig");
 
-const routes = &[_]http.Route{
-    .{ .method = http.Method.GET, .uri = "/user-agent", .handler = handlers.userAgent },
-    .{ .method = http.Method.GET, .uri = "/echo", .handler = handlers.echo },
-    .{ .method = http.Method.GET, .uri = "/", .handler = handlers.root },
-};
-
 const AppConfig = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 4221,
-    dir: []const u8 = "",
+    directory: []const u8 = "",
 };
 
 pub fn main() !void {
@@ -27,9 +21,21 @@ pub fn main() !void {
 
     try conf.parseFlags();
 
-    std.log.debug("file dir: {s}", .{conf.vals.dir});
+    var files = handlers.Files{ .directory = conf.vals.directory };
+    var user_agent = handlers.UserAgent{};
+    var echo = handlers.Echo{};
+    var root = handlers.Root{};
 
-    var server = try http.Server(routes).init(debug_alloc.allocator(), conf.vals.host, conf.vals.port);
+    const routes = &[_]http.Route{
+        .{ .method = http.Method.GET, .uri = "/files", .handler = files.handler() },
+        .{ .method = http.Method.GET, .uri = "/user-agent", .handler = user_agent.handler() },
+        .{ .method = http.Method.GET, .uri = "/echo", .handler = echo.handler() },
+        .{ .method = http.Method.GET, .uri = "/", .handler = root.handler() },
+    };
+
+    std.log.debug("file dir: {s}", .{conf.vals.directory});
+
+    var server = try http.Server.init(debug_alloc.allocator(), conf.vals.host, conf.vals.port, routes);
     defer server.deinit();
 
     std.log.debug("Running HTTP server on {s}:{d}", .{ conf.vals.host, conf.vals.port });
