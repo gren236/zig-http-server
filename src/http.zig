@@ -286,12 +286,14 @@ test Request {
 
 pub const StatusCode = enum {
     ok,
+    bad_request,
     not_found,
     internal_error,
 
     fn getCode(self: StatusCode) u16 {
         return switch (self) {
             .ok => 200,
+            .bad_request => 400,
             .not_found => 404,
             .internal_error => 500,
         };
@@ -305,6 +307,7 @@ pub const StatusCode = enum {
     fn getMessage(self: StatusCode) []const u8 {
         return switch (self) {
             .ok => "OK",
+            .bad_request => "Bad Request",
             .not_found => "Not Found",
             .internal_error => "Internal Server Error",
         };
@@ -407,10 +410,10 @@ pub const Route = struct { method: Method, uri: []const u8, handler: Handler };
 // Interface for any generic handler implementation
 pub const Handler = struct {
     ptr: *anyopaque,
-    handleFn: *const fn (ptr: *anyopaque, req: *Request, resp: *Response) anyerror!StatusCode,
+    handleFn: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, req: *Request, resp: *Response) anyerror!StatusCode,
 
-    pub fn handle(self: Handler, req: *Request, resp: *Response) anyerror!StatusCode {
-        return self.handleFn(self.ptr, req, resp);
+    pub fn handle(self: Handler, allocator: std.mem.Allocator, req: *Request, resp: *Response) anyerror!StatusCode {
+        return self.handleFn(self.ptr, allocator, req, resp);
     }
 };
 
@@ -483,7 +486,7 @@ pub const Server = struct {
             return;
         };
 
-        const resp_code = handler.handle(&req, &resp) catch |err| {
+        const resp_code = handler.handle(self.allocator, &req, &resp) catch |err| {
             std.log.err("Request handling failed: {}", .{err});
             try resp.send(StatusCode.internal_error, conn.stream.writer());
             return;
