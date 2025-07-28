@@ -179,6 +179,35 @@ test Header {
     try testing.expectEqual(Header.fromString(buffer, "Content-Type").?, Header.content_type);
 }
 
+const PathSegments = []const []const u8;
+
+fn parsePathIntoSegments(allocator: std.mem.Allocator, path: []const u8) !PathSegments {
+    var path_segments_buf: std.ArrayList([]const u8) = .init(allocator);
+
+    var path_segments_iter = std.mem.splitSequence(u8, path, "/");
+    while (path_segments_iter.next()) |seg| {
+        if (seg.len == 0) {
+            continue;
+        }
+
+        try path_segments_buf.append(seg);
+    }
+
+    return try path_segments_buf.toOwnedSlice();
+}
+
+fn matchSegmentsWithWildcard(actual: PathSegments, pattern: PathSegments) bool {
+    if (actual.len != pattern.len) return false;
+
+    for (actual, pattern) |actual_seg, pattern_seg| {
+        if (!std.mem.eql(u8, actual_seg, pattern_seg)) {
+            if (!std.mem.eql(u8, pattern_seg, "*")) return false;
+        }
+    }
+
+    return true;
+}
+
 pub const Request = struct {
     allocator: std.mem.Allocator,
 
@@ -188,7 +217,7 @@ pub const Request = struct {
     version: []const u8,
     method: Method,
     uri: []const u8,
-    path_segments: []const []const u8,
+    path_segments: PathSegments,
     headers: std.AutoHashMap(Header, []const u8),
 
     pub fn init(allocator: std.mem.Allocator, reader: anytype) !Request {
@@ -205,7 +234,7 @@ pub const Request = struct {
 
         req.status_raw = try readUntilSequenceOrEofAlloc(allocator, reader, defaultSeparator, 1024);
         try req.parseStatus();
-        try req.parsePath();
+        req.path_segments = try parsePathIntoSegments(allocator, req.uri);
 
         const headers_raw = try readUntilSequenceOrEofAlloc(allocator, reader, defaultSeparator ** 2, 1024);
         if (headers_raw.len != 0) {
@@ -232,21 +261,6 @@ pub const Request = struct {
         self.method = std.meta.stringToEnum(Method, method_raw) orelse return Error.InvalidRequest;
         self.uri = status_iter.next() orelse return Error.InvalidRequest;
         self.version = status_iter.next() orelse return Error.InvalidRequest;
-    }
-
-    fn parsePath(self: *Request) !void {
-        var path_segments_buf: std.ArrayList([]const u8) = .init(self.allocator);
-
-        var path_segments_iter = std.mem.splitSequence(u8, self.uri, "/");
-        while (path_segments_iter.next()) |seg| {
-            if (seg.len == 0) {
-                continue;
-            }
-
-            try path_segments_buf.append(seg);
-        }
-
-        self.path_segments = try path_segments_buf.toOwnedSlice();
     }
 
     fn parseHeaders(self: *Request) !void {
@@ -447,12 +461,13 @@ pub const Server = struct {
         }
     }
 
-    fn matchHandler(self: *Server, method: Method, uri: []const u8) ?Handler {
-        for (self.routes) |handler| {
-            if (handler.method == method) {
-                if (uri.len >= handler.uri.len and std.mem.eql(u8, uri[0..handler.uri.len], handler.uri)) { // match the start of URI for now
-                    return handler.handler;
-                }
+    fn matchHandler(self: *Server, method: Method, uri_segments: PathSegments) ?Handler {
+        for (self.routes) |route| {
+            if (route.method == method) {
+                const route_segments = parsePathIntoSegments(self.allocator, route.uri) catch return null;
+                defer self.allocator.free(route_segments);
+
+                if (matchSegmentsWithWildcard(uri_segments, route_segments)) return route.handler;
             }
         }
 
@@ -481,7 +496,7 @@ pub const Server = struct {
         var resp = Response.init(alloc);
         defer resp.deinit();
 
-        const handler = self.matchHandler(req.method, req.uri) orelse {
+        const handler = self.matchHandler(req.method, req.path_segments) orelse {
             try resp.send(StatusCode.not_found, conn.stream.writer());
             return;
         };

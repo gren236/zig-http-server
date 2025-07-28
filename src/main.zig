@@ -27,9 +27,9 @@ pub fn main() !void {
     var root = handlers.Root{};
 
     const routes = &[_]http.Route{
-        .{ .method = http.Method.GET, .uri = "/files", .handler = files.handler() },
+        .{ .method = http.Method.GET, .uri = "/files/*", .handler = files.handler() },
         .{ .method = http.Method.GET, .uri = "/user-agent", .handler = user_agent.handler() },
-        .{ .method = http.Method.GET, .uri = "/echo", .handler = echo.handler() },
+        .{ .method = http.Method.GET, .uri = "/echo/*", .handler = echo.handler() },
         .{ .method = http.Method.GET, .uri = "/", .handler = root.handler() },
     };
 
