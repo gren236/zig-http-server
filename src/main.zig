@@ -21,13 +21,15 @@ pub fn main() !void {
 
     try conf.parseFlags();
 
-    var files = handlers.Files{ .directory = conf.vals.directory };
+    var get_files = handlers.GetFiles{ .directory = conf.vals.directory };
+    var post_files = handlers.PostFiles{ .directory = conf.vals.directory };
     var user_agent = handlers.UserAgent{};
     var echo = handlers.Echo{};
     var root = handlers.Root{};
 
     const routes = &[_]http.Route{
-        .{ .method = http.Method.GET, .uri = "/files/*", .handler = files.handler() },
+        .{ .method = http.Method.POST, .uri = "/files/*", .handler = post_files.handler() },
+        .{ .method = http.Method.GET, .uri = "/files/*", .handler = get_files.handler() },
         .{ .method = http.Method.GET, .uri = "/user-agent", .handler = user_agent.handler() },
         .{ .method = http.Method.GET, .uri = "/echo/*", .handler = echo.handler() },
         .{ .method = http.Method.GET, .uri = "/", .handler = root.handler() },

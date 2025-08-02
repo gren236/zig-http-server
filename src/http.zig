@@ -211,25 +211,20 @@ fn matchSegmentsWithWildcard(actual: PathSegments, pattern: PathSegments) bool {
 pub const Request = struct {
     allocator: std.mem.Allocator,
 
-    status_raw: []const u8,
-    headers_raw: ?[]const u8,
+    status_raw: []const u8 = undefined,
+    headers_raw: ?[]const u8 = null,
 
-    version: []const u8,
-    method: Method,
-    uri: []const u8,
-    path_segments: PathSegments,
+    version: []const u8 = undefined,
+    method: Method = undefined,
+    uri: []const u8 = undefined,
+    path_segments: PathSegments = undefined,
     headers: std.AutoHashMap(Header, []const u8),
+    body: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, reader: anytype) !Request {
         var req = Request{
             .allocator = allocator,
-            .status_raw = undefined,
-            .headers_raw = null,
             .headers = std.AutoHashMap(Header, []const u8).init(allocator),
-            .method = undefined,
-            .uri = undefined,
-            .path_segments = undefined,
-            .version = undefined,
         };
 
         req.status_raw = try readUntilSequenceOrEofAlloc(allocator, reader, defaultSeparator, 1024);
@@ -242,6 +237,16 @@ pub const Request = struct {
             try req.parseHeaders();
         }
 
+        if (req.headers.contains(Header.content_length)) {
+            const content_length = req.headers.get(Header.content_length) orelse return Error.InvalidRequest;
+            const len = try std.fmt.parseInt(usize, content_length, 10);
+
+            const buffer = try allocator.alloc(u8, len);
+            _ = try reader.readAll(buffer);
+
+            req.body = buffer;
+        }
+
         return req;
     }
 
@@ -249,6 +254,9 @@ pub const Request = struct {
         self.allocator.free(self.status_raw);
         if (self.headers_raw != null) {
             self.allocator.free(self.headers_raw.?);
+        }
+        if (self.body != null) {
+            self.allocator.free(self.body.?);
         }
         self.headers.deinit();
         self.allocator.free(self.path_segments);
@@ -283,7 +291,8 @@ pub const Request = struct {
 };
 
 test Request {
-    const request_raw = "GET /echo/abcd HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n";
+    const request_raw =
+        "GET /echo/abcd HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nContent-Type: application/octet-stream\r\nContent-Length: 5\r\nAccept: */*\r\n\r\n12345";
     var buf_stream = std.io.fixedBufferStream(request_raw);
     const reader = buf_stream.reader();
     var req = try Request.init(testing.allocator, reader);
@@ -296,10 +305,12 @@ test Request {
     try testing.expectEqualStrings("abcd", req.path_segments[1]);
     try testing.expectEqual(Header.user_agent, req.headers.getKey(Header.user_agent).?);
     try testing.expectEqualStrings("localhost:4221", req.headers.get(Header.host).?);
+    try testing.expectEqualStrings("12345", req.body.?);
 }
 
 pub const StatusCode = enum {
     ok,
+    created,
     bad_request,
     not_found,
     internal_error,
@@ -307,6 +318,7 @@ pub const StatusCode = enum {
     fn getCode(self: StatusCode) u16 {
         return switch (self) {
             .ok => 200,
+            .created => 201,
             .bad_request => 400,
             .not_found => 404,
             .internal_error => 500,
@@ -321,6 +333,7 @@ pub const StatusCode = enum {
     fn getMessage(self: StatusCode) []const u8 {
         return switch (self) {
             .ok => "OK",
+            .created => "Created",
             .bad_request => "Bad Request",
             .not_found => "Not Found",
             .internal_error => "Internal Server Error",
@@ -501,10 +514,17 @@ pub const Server = struct {
             return;
         };
 
-        const resp_code = handler.handle(self.allocator, &req, &resp) catch |err| {
-            std.log.err("Request handling failed: {}", .{err});
-            try resp.send(StatusCode.internal_error, conn.stream.writer());
-            return;
+        const resp_code = handler.handle(self.allocator, &req, &resp) catch |err| switch (err) {
+            Error.InvalidRequest => {
+                std.log.err("Request malformed", .{});
+                try resp.send(StatusCode.bad_request, conn.stream.writer());
+                return;
+            },
+            else => {
+                std.log.err("Request handling failed: {}", .{err});
+                try resp.send(StatusCode.internal_error, conn.stream.writer());
+                return;
+            },
         };
 
         try resp.send(resp_code, conn.stream.writer());

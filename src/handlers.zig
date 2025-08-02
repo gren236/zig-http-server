@@ -59,11 +59,11 @@ pub const Echo = struct {
     }
 };
 
-pub const Files = struct {
+pub const GetFiles = struct {
     directory: []const u8,
 
     fn handle(ptr: *anyopaque, allocator: std.mem.Allocator, req: *http.Request, resp: *http.Response) anyerror!http.StatusCode {
-        const self: *Files = @ptrCast(@alignCast(ptr));
+        const self: *GetFiles = @ptrCast(@alignCast(ptr));
 
         if (req.path_segments.len < 1) {
             return http.StatusCode.bad_request;
@@ -86,7 +86,41 @@ pub const Files = struct {
         return http.StatusCode.ok;
     }
 
-    pub fn handler(self: *Files) http.Handler {
+    pub fn handler(self: *GetFiles) http.Handler {
+        return .{
+            .ptr = self,
+            .handleFn = handle,
+        };
+    }
+};
+
+pub const PostFiles = struct {
+    directory: []const u8,
+
+    fn handle(ptr: *anyopaque, allocator: std.mem.Allocator, req: *http.Request, resp: *http.Response) anyerror!http.StatusCode {
+        _ = allocator;
+        _ = resp;
+
+        const self: *PostFiles = @ptrCast(@alignCast(ptr));
+
+        if (req.path_segments.len < 1) {
+            return http.StatusCode.bad_request;
+        }
+
+        const filename = req.path_segments[1];
+
+        var dir = try std.fs.openDirAbsolute(self.directory, .{ .iterate = true });
+        defer dir.close();
+
+        var file = try dir.createFile(filename, .{});
+        defer file.close();
+
+        try file.writeAll(req.body.?);
+
+        return http.StatusCode.created;
+    }
+
+    pub fn handler(self: *PostFiles) http.Handler {
         return .{
             .ptr = self,
             .handleFn = handle,
