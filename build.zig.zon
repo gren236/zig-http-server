@@ -1,5 +1,5 @@
 .{
-    .name = .codecrafters_http_server,
+    .name = .zig_http_server,
     .fingerprint = 0xe0b9fabc244c324e,
 
     // This is a [Semantic Version](https://semver.org/).
