@@ -569,7 +569,7 @@ pub const Server = struct {
         };
 
         // handler compression
-        if (req.compressions != null) {
+        if (req.compressions != null and req.compressions.?.len > 0) {
             switch (req.compressions.?[0]) {
                 .gzip => try resp.setHeader(Header.content_encoding, Compression.gzip.toString()),
             }

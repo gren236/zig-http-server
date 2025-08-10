@@ -41,3 +41,15 @@ Accept-Encoding: invalid-encoding
 HTTP 200
 [Asserts]
 header "Content-Encoding" not exists
+
+GET http://localhost:4221/echo/abc
+Accept-Encoding: invalid-encoding-1, gzip, invalid-encoding-2
+HTTP 200
+[Asserts]
+header "Content-Encoding" == "gzip"
+
+GET http://localhost:4221/echo/abc
+Accept-Encoding: invalid-encoding-1, invalid-encoding-2
+HTTP 200
+[Asserts]
+header "Content-Encoding" not exists
