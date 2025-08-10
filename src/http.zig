@@ -159,6 +159,7 @@ pub const Header = enum {
     host,
     accept,
     accept_encoding,
+    content_encoding,
 
     pub inline fn toString(self: Header) []const u8 {
         return header_names[@intFromEnum(self)];
@@ -166,6 +167,18 @@ pub const Header = enum {
 
     pub fn fromString(buffer: []u8, s: []const u8) ?Header {
         return header_names_map.get(std.ascii.lowerString(buffer, s));
+    }
+};
+
+pub const Compression = enum {
+    gzip,
+
+    pub inline fn fromString(s: []const u8) ?Compression {
+        return std.meta.stringToEnum(Compression, s);
+    }
+
+    pub inline fn toString(self: Compression) []const u8 {
+        return @tagName(self);
     }
 };
 
@@ -220,6 +233,7 @@ pub const Request = struct {
     path_segments: PathSegments = undefined,
     headers: std.AutoHashMap(Header, []const u8),
     body: ?[]const u8 = null,
+    compressions: ?[]Compression = null,
 
     pub fn init(allocator: std.mem.Allocator, reader: anytype) !Request {
         var req = Request{
@@ -247,17 +261,18 @@ pub const Request = struct {
             req.body = buffer;
         }
 
+        if (req.headers.contains(Header.accept_encoding)) {
+            try req.parseCompressions();
+        }
+
         return req;
     }
 
     pub fn deinit(self: *Request) void {
         self.allocator.free(self.status_raw);
-        if (self.headers_raw != null) {
-            self.allocator.free(self.headers_raw.?);
-        }
-        if (self.body != null) {
-            self.allocator.free(self.body.?);
-        }
+        if (self.headers_raw != null) self.allocator.free(self.headers_raw.?);
+        if (self.body != null) self.allocator.free(self.body.?);
+        if (self.compressions != null) self.allocator.free(self.compressions.?);
         self.headers.deinit();
         self.allocator.free(self.path_segments);
     }
@@ -288,11 +303,36 @@ pub const Request = struct {
             try self.headers.put(header_name, std.mem.trim(u8, value, " "));
         }
     }
+
+    fn parseCompressions(self: *Request) !void {
+        const header_val = self.headers.get(Header.accept_encoding) orelse return Error.InvalidRequest;
+
+        if (header_val.len <= 0) return;
+
+        var comps_list = std.ArrayList(Compression).init(self.allocator);
+        var val_iter = std.mem.splitScalar(u8, header_val, ',');
+
+        while (val_iter.next()) |val| {
+            try comps_list.append(Compression.fromString(std.mem.trim(u8, val, " ")) orelse continue);
+        }
+
+        if (comps_list.items.len == 0) return;
+
+        self.compressions = try comps_list.toOwnedSlice();
+    }
 };
 
 test Request {
     const request_raw =
-        "GET /echo/abcd HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: curl/7.64.1\r\nContent-Type: application/octet-stream\r\nContent-Length: 5\r\nAccept: */*\r\n\r\n12345";
+        "GET /echo/abcd HTTP/1.1\r\n" ++
+        "Host: localhost:4221\r\n" ++
+        "User-Agent: curl/7.64.1\r\n" ++
+        "Content-Type: application/octet-stream\r\n" ++
+        "Content-Length: 5\r\n" ++
+        "Accept: */*\r\n" ++
+        "Accept-Encoding: gzip\r\n" ++
+        "\r\n" ++
+        "12345";
     var buf_stream = std.io.fixedBufferStream(request_raw);
     const reader = buf_stream.reader();
     var req = try Request.init(testing.allocator, reader);
@@ -306,6 +346,7 @@ test Request {
     try testing.expectEqual(Header.user_agent, req.headers.getKey(Header.user_agent).?);
     try testing.expectEqualStrings("localhost:4221", req.headers.get(Header.host).?);
     try testing.expectEqualStrings("12345", req.body.?);
+    try testing.expectEqual(req.compressions.?[0], Compression.gzip);
 }
 
 pub const StatusCode = enum {
@@ -526,6 +567,13 @@ pub const Server = struct {
                 return;
             },
         };
+
+        // handler compression
+        if (req.compressions != null) {
+            switch (req.compressions.?[0]) {
+                .gzip => try resp.setHeader(Header.content_encoding, Compression.gzip.toString()),
+            }
+        }
 
         try resp.send(resp_code, conn.stream.writer());
     }

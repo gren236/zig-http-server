@@ -28,3 +28,16 @@ HTTP 200
 header "Content-Type" == "application/octet-stream"
 header "Content-Length" == "13"
 body contains "hello, world!"
+
+# Test compression
+GET http://localhost:4221/echo/abc
+Accept-Encoding: gzip
+HTTP 200
+[Asserts]
+header "Content-Encoding" == "gzip"
+
+GET http://localhost:4221/echo/abc
+Accept-Encoding: invalid-encoding
+HTTP 200
+[Asserts]
+header "Content-Encoding" not exists
