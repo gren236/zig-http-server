@@ -391,13 +391,13 @@ test StatusCode {
 pub const Response = struct {
     allocator: std.mem.Allocator,
     headers: std.AutoHashMap(Header, []const u8),
-    body: ?[]u8,
+    body: ?[]u8 = null,
+    compression: ?Compression = null,
 
     pub fn init(allocator: std.mem.Allocator) Response {
         return .{
             .allocator = allocator,
             .headers = std.AutoHashMap(Header, []const u8).init(allocator),
-            .body = null,
         };
     }
 
@@ -421,15 +421,19 @@ pub const Response = struct {
     }
 
     pub fn setBody(self: *Response, body: []const u8) !void {
-        try self.headers.put(
-            Header.content_length,
-            try std.fmt.allocPrint(self.allocator, "{d}", .{body.len}),
-        );
         self.body = try self.allocator.alloc(u8, body.len);
         @memcpy(self.body.?, body);
     }
 
+    pub fn setCompression(self: *Response, comp: Compression) !void {
+        self.compression = comp;
+        try self.setHeader(Header.content_encoding, comp.toString());
+    }
+
     pub fn send(self: *Response, code: StatusCode, writer: anytype) !void {
+        const body = try self.prepareBody();
+        defer if (body != null) self.allocator.free(body.?);
+
         var buffer: std.ArrayList(u8) = .init(self.allocator);
         defer buffer.deinit();
 
@@ -450,12 +454,40 @@ pub const Response = struct {
             _ = try buffer.appendSlice(defaultSeparator);
         }
 
+        // Body
         _ = try buffer.appendSlice(defaultSeparator);
-        if (self.body != null) {
-            _ = try buffer.appendSlice(self.body.?);
+        if (body != null) {
+            _ = try buffer.appendSlice(body.?);
         }
 
         _ = try writer.write(buffer.items);
+    }
+
+    fn prepareBody(self: *Response) !?[]const u8 {
+        if (self.body == null) {
+            return null;
+        }
+
+        var buffer = std.ArrayList(u8).init(self.allocator);
+
+        // Compress if needed
+        if (self.compression != null) {
+            switch (self.compression.?) {
+                .gzip => {
+                    var body_stream = std.io.fixedBufferStream(self.body.?);
+                    try std.compress.gzip.compress(body_stream.reader(), buffer.writer(), .{});
+                },
+            }
+        } else {
+            _ = try buffer.appendSlice(self.body.?);
+        }
+
+        try self.headers.put(
+            Header.content_length,
+            try std.fmt.allocPrint(self.allocator, "{d}", .{buffer.items.len}),
+        );
+
+        return try buffer.toOwnedSlice();
     }
 };
 
@@ -570,9 +602,7 @@ pub const Server = struct {
 
         // handler compression
         if (req.compressions != null and req.compressions.?.len > 0) {
-            switch (req.compressions.?[0]) {
-                .gzip => try resp.setHeader(Header.content_encoding, Compression.gzip.toString()),
-            }
+            try resp.setCompression(req.compressions.?[0]);
         }
 
         try resp.send(resp_code, conn.stream.writer());

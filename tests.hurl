@@ -35,6 +35,9 @@ Accept-Encoding: gzip
 HTTP 200
 [Asserts]
 header "Content-Encoding" == "gzip"
+header "Content-Type" == "text/plain"
+header "Content-Length" == "23"
+body contains "abc"
 
 GET http://localhost:4221/echo/abc
 Accept-Encoding: invalid-encoding
